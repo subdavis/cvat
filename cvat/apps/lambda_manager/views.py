@@ -1,4 +1,5 @@
 import base64
+import copy
 import json
 from functools import wraps
 from enum import Enum
@@ -60,7 +61,8 @@ class LambdaGateway:
 
     def list(self):
         data = self._http(url=self.NUCLIO_ROOT_URL)
-        response = [LambdaFunction(self, item) for item in data.values()]
+        # response = [LambdaFunction(self, item) for item in data.values()]
+        response = LambdaFunction.populate_from_list(self, data.values())
         return response
 
     def get(self, func_id):
@@ -78,13 +80,15 @@ class LambdaGateway:
         return self._http(method="post", url='/api/function_invocations',
             data=payload, headers={
                 'x-nuclio-function-name': func.id,
-                'x-nuclio-path': '/'
+                'x-nuclio-path': func.path,
             })
 
 class LambdaFunction:
-    def __init__(self, gateway, data):
+    def __init__(self, gateway, data, path = '/'):
         # ID of the function (e.g. omz.public.yolo-v3)
         self.id = data['metadata']['name']
+        # The URI within this function to invoke
+        self.path = path
         # type of the function (e.g. detector, interactor)
         meta_anno = data['metadata']['annotations']
         kind = meta_anno.get('type')
@@ -104,7 +108,7 @@ class LambdaFunction:
         self.state = data['status']['state']
         # description of the function
         self.description = data['spec']['description']
-        # http port to access the serverless function
+        # NOTE: http port to access the serverless function is unused, see gateway.invoke
         self.port = data["status"].get("httpPort")
         # framework which is used for the function (e.g. tensorflow, openvino)
         self.framework = meta_anno.get('framework')
@@ -116,6 +120,34 @@ class LambdaFunction:
         self.animated_gif = meta_anno.get('animated_gif', '')
         self.help_message = meta_anno.get('help_message', '')
         self.gateway = gateway
+
+    @classmethod
+    def populate_from_list(gateway, nuclio_functions):
+        """Populate a list of Lambdas from the Nuclio function manifest"""
+        cvat_lambdas = []
+        for function in nuclio_functions:
+            # Functions indicate that they support CVAT
+            # by supplying the "annotations" metadata property
+            annotations = function['metadata']['annotations']
+            if annotations is None:
+                continue
+            elif isinstance(annotations, list):
+                # A single Nuclio function can support multiple modes of
+                # invocation from CVAT by supplying a list of annotation
+                # dictionaries instead of a single dict
+                for mode in annotations:
+                    spec_copy = copy.deepcopy(function)
+                    spec_copy['metadata']['annotations'] = mode
+                    path = mode.get('name', None)
+                    if path is None:
+                        raise ValidationError((
+                            '"name" must be specified for configurations'
+                            ' with multiple invocation modes.'
+                        ))
+                    cvat_lambdas.append(LambdaFunction(gateway, spec_copy, path))
+            else:
+                cvat_lambdas.append(LambdaFunction(gateway, function))
+        return cvat_lambdas
 
     def to_dict(self):
         response = {
