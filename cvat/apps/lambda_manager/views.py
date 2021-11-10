@@ -97,7 +97,7 @@ class LambdaFunction:
         except ValueError:
             self.kind = LambdaType.UNKNOWN
         # dictionary of labels for the function (e.g. car, person)
-        spec = json.loads(meta_anno.get('spec') or '[]')
+        spec = meta_anno.get('spec')
         labels = [item['name'] for item in spec]
         if len(labels) != len(set(labels)):
             raise ValidationError(
@@ -121,7 +121,7 @@ class LambdaFunction:
         self.help_message = meta_anno.get('help_message', '')
         self.gateway = gateway
 
-    @classmethod
+    @staticmethod
     def populate_from_list(gateway, nuclio_functions):
         """Populate a list of Lambdas from the Nuclio function manifest"""
         cvat_lambdas = []
@@ -131,11 +131,12 @@ class LambdaFunction:
             annotations = function['metadata']['annotations']
             if annotations is None:
                 continue
-            elif isinstance(annotations, list):
+            multimodal = annotations.get('multimodal', None)
+            if multimodal is not None:
                 # A single Nuclio function can support multiple modes of
                 # invocation from CVAT by supplying a list of annotation
                 # dictionaries instead of a single dict
-                for mode in annotations:
+                for mode in json.loads(multimodal):
                     spec_copy = copy.deepcopy(function)
                     spec_copy['metadata']['annotations'] = mode
                     path = mode.get('name', None)
@@ -146,6 +147,7 @@ class LambdaFunction:
                         ))
                     cvat_lambdas.append(LambdaFunction(gateway, spec_copy, path))
             else:
+                function['metadata']['annotations']['spec'] = json.loads(annotations.get('spec', '[]'))
                 cvat_lambdas.append(LambdaFunction(gateway, function))
         return cvat_lambdas
 
